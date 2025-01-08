@@ -307,8 +307,11 @@ def main():
         </style>
     """, unsafe_allow_html=True)
     
-    st.title("📊 Data Analyst Agent (Gemini)")
+    st.title("📊 Data Analyst Agent")
     st.write("Upload your data and ask questions in plain English!")
+
+    # Add note about providing context
+    st.info("📝 **Note:** For better results, provide context about your data in your queries. A brief description of the dataset will help the model understand the data better. You can also for example ask for a summary of the data or a trend over time.", icon="ℹ️")
     
     uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
     
