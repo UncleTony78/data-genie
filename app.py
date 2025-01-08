@@ -6,6 +6,7 @@ import tempfile
 import csv
 import json
 import plotly.express as px
+from plotly.graph_objs import Figure
 from typing import Tuple, List, Optional
 import os
 from dotenv import load_dotenv
@@ -184,7 +185,128 @@ def get_column_summary(df: pd.DataFrame) -> dict:
         }
     return summary
 
+def create_visualization(results_df: pd.DataFrame, question: str) -> Optional[Figure]:
+    """Create appropriate visualization based on the data and question."""
+    try:
+        # For overview/summary questions
+        if any(word in question.lower() for word in ['overview', 'summary', 'tell me about', 'describe']):
+            # Create a summary bar chart for numeric columns
+            numeric_cols = results_df.select_dtypes(include=['float64', 'int64']).columns
+            if len(numeric_cols) > 0:
+                fig = px.bar(
+                    results_df.melt(value_vars=numeric_cols),
+                    x='variable',
+                    y='value',
+                    title='Summary of Key Metrics',
+                    labels={'variable': 'Metric', 'value': 'Value'},
+                    template='plotly_dark'
+                )
+                fig.update_layout(
+                    showlegend=False,
+                    xaxis_title="",
+                    yaxis_title="Value",
+                    title_x=0.5
+                )
+                return fig
+
+        # For trend analysis
+        if any(word in question.lower() for word in ['trend', 'over time', 'pattern']):
+            if 'Year' in results_df.columns or 'Date' in results_df.columns:
+                time_col = 'Year' if 'Year' in results_df.columns else 'Date'
+                numeric_cols = results_df.select_dtypes(include=['float64', 'int64']).columns
+                if len(numeric_cols) > 0:
+                    fig = px.line(
+                        results_df,
+                        x=time_col,
+                        y=numeric_cols,
+                        title=f'Trends Over {time_col}',
+                        template='plotly_dark'
+                    )
+                    fig.update_layout(
+                        xaxis_title=time_col,
+                        yaxis_title="Value",
+                        title_x=0.5
+                    )
+                    return fig
+
+        # For comparison questions
+        if any(word in question.lower() for word in ['compare', 'comparison', 'versus', 'vs']):
+            numeric_cols = results_df.select_dtypes(include=['float64', 'int64']).columns
+            if len(numeric_cols) >= 2:
+                fig = px.scatter(
+                    results_df,
+                    x=numeric_cols[0],
+                    y=numeric_cols[1],
+                    title=f'{numeric_cols[0]} vs {numeric_cols[1]}',
+                    template='plotly_dark'
+                )
+                fig.update_layout(title_x=0.5)
+                return fig
+
+        # For distribution analysis
+        if any(word in question.lower() for word in ['distribution', 'spread', 'range']):
+            numeric_cols = results_df.select_dtypes(include=['float64', 'int64']).columns
+            if len(numeric_cols) > 0:
+                fig = px.box(
+                    results_df,
+                    y=numeric_cols,
+                    title='Distribution of Numeric Values',
+                    template='plotly_dark'
+                )
+                fig.update_layout(
+                    showlegend=False,
+                    xaxis_title="",
+                    yaxis_title="Value",
+                    title_x=0.5
+                )
+                return fig
+
+        # Default visualization for numeric data
+        numeric_cols = results_df.select_dtypes(include=['float64', 'int64']).columns
+        if len(numeric_cols) > 0:
+            if len(results_df) > 1:
+                fig = px.bar(
+                    results_df,
+                    y=numeric_cols[0],
+                    title=f'{numeric_cols[0]} Overview',
+                    template='plotly_dark'
+                )
+            else:
+                # For single row results, create a pie chart
+                fig = px.pie(
+                    results_df.melt(value_vars=numeric_cols),
+                    values='value',
+                    names='variable',
+                    title='Distribution of Metrics',
+                    template='plotly_dark'
+                )
+            fig.update_layout(title_x=0.5)
+            return fig
+
+        return None
+    except Exception as e:
+        st.warning(f"Couldn't generate visualization: {str(e)}")
+        return None
+
 def main():
+    st.set_page_config(layout="wide")  # Use wide layout for better visualizations
+    
+    # Custom CSS for better styling
+    st.markdown("""
+        <style>
+        .stApp {
+            background-color: #0E1117;
+            color: #FAFAFA;
+        }
+        .st-emotion-cache-1wmy9hl {
+            background-color: #1E2127;
+        }
+        .st-emotion-cache-1y4p8pa {
+            max-width: 100%;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     st.title("📊 Data Analyst Agent (Gemini)")
     st.write("Upload your data and ask questions in plain English!")
     
@@ -194,18 +316,22 @@ def main():
         temp_path, columns, df = preprocess_and_save(uploaded_file)
         
         if temp_path and columns and df is not None:
-            # Data Preview Section
-            st.write("### Data Overview")
-            st.write(f"- Total Rows: {len(df)}")
-            st.write(f"- Total Columns: {len(df.columns)}")
+            # Create two columns for layout
+            col1, col2 = st.columns([2, 1])
             
-            # Display column names
-            st.write("### Uploaded columns:")
-            st.json(columns)  # This will display the columns in a format similar to your screenshot
+            with col1:
+                st.write("### Data Overview")
+                st.write(f"- Total Rows: {len(df)}")
+                st.write(f"- Total Columns: {len(df.columns)}")
+                
+                # Display column names
+                st.write("### Uploaded columns:")
+                st.json(columns)
             
-            # Data Preview
-            st.write("### Data Preview")
-            st.dataframe(df.head())
+            with col2:
+                # Data Preview
+                st.write("### Data Preview")
+                st.dataframe(df.head(), use_container_width=True)
             
             # Get column summary before creating schema
             column_summary = get_column_summary(df)
@@ -233,10 +359,19 @@ def main():
             # Query interface with context
             st.write("### Ask Questions")
             st.write("You can ask questions about:")
-            st.write("- Column statistics (average, sum, count, etc.)")
-            st.write("- Data filtering and grouping")
-            st.write("- Trends and patterns")
-            st.write("- Relationships between columns")
+            cols = st.columns(4)
+            with cols[0]:
+                st.write("- Column statistics")
+                st.write("- Averages and sums")
+            with cols[1]:
+                st.write("- Data filtering")
+                st.write("- Grouping data")
+            with cols[2]:
+                st.write("- Trends and patterns")
+                st.write("- Time analysis")
+            with cols[3]:
+                st.write("- Comparisons")
+                st.write("- Distributions")
             
             question = st.text_area(
                 "Ask a question about your data:", 
@@ -253,24 +388,26 @@ def main():
                     with st.spinner("Executing query..."):
                         results_df = execute_query(sql_query, conn)
                         if not results_df.empty:
-                            st.write("### Results")
-                            st.dataframe(results_df)
+                            # Create two columns for results and visualization
+                            results_col, viz_col = st.columns([1, 1])
                             
-                            # Generate analysis
-                            with st.spinner("Analyzing results..."):
-                                analysis = analyze_results(results_df, question)
-                                st.write("### Analysis")
-                                st.write(analysis)
+                            with results_col:
+                                st.write("### Results")
+                                st.dataframe(results_df, use_container_width=True)
+                                
+                                # Generate analysis
+                                with st.spinner("Analyzing results..."):
+                                    analysis = analyze_results(results_df, question)
+                                    st.write("### Analysis")
+                                    st.write(analysis)
                             
-                            # Attempt to create a visualization
-                            if len(results_df) > 0 and len(results_df.columns) >= 2:
-                                try:
-                                    if results_df.select_dtypes(include=['number']).columns.any():
-                                        st.write("### Visualization")
-                                        fig = px.line(results_df) if len(results_df) > 1 else px.bar(results_df)
-                                        st.plotly_chart(fig)
-                                except Exception as e:
-                                    st.warning("Couldn't generate visualization automatically.")
+                            with viz_col:
+                                st.write("### Visualization")
+                                fig = create_visualization(results_df, question)
+                                if fig:
+                                    st.plotly_chart(fig, use_container_width=True)
+                                else:
+                                    st.info("No suitable visualization could be generated for this query.")
                 else:
                     st.warning("Please enter a question!")
 
