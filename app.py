@@ -30,19 +30,41 @@ def preprocess_and_save(file) -> Tuple[Optional[str], Optional[List[str]], Optio
         elif file.name.endswith('.xlsx'):
             df = pd.read_excel(file)
         
+        # Clean column names: remove extra spaces and standardize
+        df.columns = [col.strip().replace('"', '') for col in df.columns]  # Remove quotes and spaces
+        
+        # Create a mapping of old to new column names to handle spaces consistently
+        column_mapping = {col: col.strip() for col in df.columns}
+        df = df.rename(columns=column_mapping)
+        
         # Clean and format data
         for col in df.select_dtypes(include=['object']):
-            df[col] = df[col].astype(str).replace({r'"': '""'}, regex=True)
+            # Replace 'None', 'NaN', 'null' with actual None
+            df[col] = df[col].replace(['None', 'NaN', 'null', 'NULL', ''], None)
+            # Clean string values (only for non-null values)
+            df[col] = df[col].apply(lambda x: x.strip() if isinstance(x, str) else x)
         
         # Handle dates and numbers
         for col in df.columns:
             if 'date' in col.lower():
                 df[col] = pd.to_datetime(df[col], errors='coerce')
+            # Clean numeric columns
+            elif any(word in col.lower() for word in ['price', 'sales', 'profit', 'cost', 'discount', 'units']):
+                try:
+                    # First replace None-like values with NaN
+                    df[col] = df[col].replace(['None', 'NaN', 'null', 'NULL', ''], pd.NA)
+                    # Convert to numeric, coercing errors to NaN
+                    df[col] = pd.to_numeric(
+                        df[col].astype(str).str.replace('$', '').str.replace(',', ''),
+                        errors='coerce'
+                    )
+                except Exception as e:
+                    st.warning(f"Warning: Could not convert column '{col}' to numeric. Error: {e}")
         
         # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as temp_file:
             temp_path = temp_file.name
-            df.to_csv(temp_path, index=False, quoting=csv.QUOTE_ALL)
+            df.to_csv(temp_path, index=False)
         
         return temp_path, df.columns.tolist(), df
     except Exception as e:
@@ -66,6 +88,24 @@ def generate_sql_query(question: str, schema: dict) -> str:
     3. Use the table name 'uploaded_data'
     4. Keep the query simple and focused
     5. Handle potential NULL values appropriately
+    6. Column names have been cleaned (no extra spaces or quotes)
+    7. Use the exact column names as shown in the schema
+    8. For the overview query, include:
+       - Total rows
+       - Unique values in key columns
+       - Min/Max/Avg of numeric columns
+       - Date range if dates exist
+
+    Example query for dataset overview:
+    SELECT 
+        COUNT(*) as total_rows,
+        COUNT(DISTINCT Segment) as unique_segments,
+        COUNT(DISTINCT Country) as unique_countries,
+        MIN(Date) as earliest_date,
+        MAX(Date) as latest_date,
+        AVG("Units Sold") as avg_units_sold,
+        SUM("Gross Sales") as total_sales
+    FROM uploaded_data;
 
     SQL Query:"""
     
@@ -166,6 +206,9 @@ def main():
             # Data Preview
             st.write("### Data Preview")
             st.dataframe(df.head())
+            
+            # Get column summary before creating schema
+            column_summary = get_column_summary(df)
             
             # Create enhanced schema for the uploaded data
             schema = {
